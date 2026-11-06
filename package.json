@@ -1,7 +1,7 @@
 {
-  "name": "voidbreaker-overdrive",
+  "name": "madden-franchise-2005-dynasty",
   "version": "1.0.0",
-  "description": "VOIDBREAKER: OVERDRIVE — Cyber-Mech Twin-Stick Action Roguelite & Bullet-Heaven Boss-Rush Game",
+  "description": "MADDEN FRANCHISE '05: Stand-Alone NFL Franchise & Owner Mode Game (Storyline Central, Tony Bruno Radio, Newspapers, 2D Live Tactical Field, Hit Stick, Salary Cap, Trades, Combine Draft & Training Camp)",
   "type": "module",
   "scripts": {
     "dev": "vite",

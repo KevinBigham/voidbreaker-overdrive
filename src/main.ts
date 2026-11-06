@@ -1,6 +1,7 @@
-import { SoundEngine } from './audio/sound-engine';
-import { MECH_SPECS, MechId } from './game/mechs';
-import { AUGMENTS, AugmentSpec, SYNERGY_EVOLUTIONS } from './game/augments';
+import { SoundEngine } from './omega/sound-engine';
+import { MECH_SPECS, MechId } from './omega/mechs';
+import { AUGMENTS, AugmentSpec, SYNERGY_EVOLUTIONS } from './omega/augments';
+import { BossId } from './omega/bosses';
 import {
   ACHIEVEMENTS,
   ARMORY_UPGRADES,
@@ -8,12 +9,16 @@ import {
   loadProfile,
   purchaseArmoryUpgrade,
   saveProfile,
-} from './game/persistence';
-import { GameWorld } from './game/state';
+} from './omega/persistence';
+import { Holodeck3DViewer } from './omega/holodeck-3d';
+import { GameWorld, NucleotideBase, StyleRank } from './omega/state';
 
-// 1. Conditionally load Invoker Commands polyfill per modern-web-guidance
+// 1. Conditionally load Invoker Commands & Popover polyfills per declarative-dialog-popover-control
 if (typeof HTMLButtonElement !== 'undefined' && !('commandForElement' in HTMLButtonElement.prototype)) {
   void import('invokers-polyfill');
+}
+if (typeof HTMLElement !== 'undefined' && !('popover' in HTMLElement.prototype)) {
+  void import('@oddbird/popover-polyfill');
 }
 
 // 2. Top-layer exit transition probe & helper per animate-to-from-top-layer guide
@@ -80,6 +85,18 @@ function setupDialogClosedByFallback(): void {
   }
 }
 
+const BOSS_ORDER: readonly BossId[] = ['seraph', 'leviathan', 'xenofold_omega', 'architect'];
+
+const STYLE_RANK_INFO: Record<StyleRank, { label: string; cssClass: string }> = {
+  D: { label: 'DORMANT', cssClass: 'rank-d' },
+  C: { label: 'CHARGED', cssClass: 'rank-c' },
+  B: { label: 'BALLISTIC', cssClass: 'rank-b' },
+  A: { label: 'ANNIHILATOR', cssClass: 'rank-a' },
+  S: { label: 'SAVAGE', cssClass: 'rank-s' },
+  SS: { label: 'SUPERNOVA', cssClass: 'rank-ss' },
+  VOIDBREAKER: { label: 'OMEGA HELIX', cssClass: 'rank-sss' },
+};
+
 function bootstrapGame(): void {
   const viewport = document.getElementById('game-viewport') as HTMLElement;
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -88,157 +105,221 @@ function bootstrapGame(): void {
   const radarCtx = radarCanvas.getContext('2d')!;
 
   const hangarDialog = document.getElementById('hangar-dialog') as HTMLDialogElement;
+  const holodeckDialog = document.getElementById('holodeck-dialog') as HTMLDialogElement;
   const augmentDialog = document.getElementById('augment-dialog') as HTMLDialogElement;
   const armoryDialog = document.getElementById('armory-dialog') as HTMLDialogElement;
   const codexDialog = document.getElementById('codex-dialog') as HTMLDialogElement;
   const gameoverDialog = document.getElementById('gameover-dialog') as HTMLDialogElement;
 
-  const allDialogs = [hangarDialog, augmentDialog, armoryDialog, codexDialog, gameoverDialog];
+  const holodeckCanvas = document.getElementById('holodeck-canvas') as HTMLCanvasElement;
+  const holodeckViewer = new Holodeck3DViewer(holodeckCanvas);
+
+  const allDialogs = [
+    hangarDialog,
+    holodeckDialog,
+    augmentDialog,
+    armoryDialog,
+    codexDialog,
+    gameoverDialog,
+  ];
 
   const profile = loadProfile();
   const sound = new SoundEngine();
 
-  let currentDraftChoices: AugmentSpec[] = [];
+  // Persistent Toast Notification ([popover="manual"])
+  const toastEl = document.getElementById('achievement-toast') as HTMLElement;
+  const toastTagEl = document.getElementById('toast-tag') as HTMLElement;
+  const toastTitleEl = document.getElementById('toast-title') as HTMLElement;
+  const toastDescEl = document.getElementById('toast-desc') as HTMLElement;
   let toastTimeout = 0;
 
-  const showToast = (title: string, subtitle: string, accentColor = '#00f2fe') => {
-    const banner = document.getElementById('toast-banner')!;
-    const titleEl = document.getElementById('toast-title')!;
-    const subEl = document.getElementById('toast-subtitle')!;
-    banner.hidden = false;
-    banner.style.borderColor = accentColor;
-    titleEl.style.color = accentColor;
-    titleEl.textContent = title;
-    subEl.textContent = subtitle;
+  function showToast(title: string, subtitle: string, _accentColor?: string): void {
+    toastTagEl.textContent = 'OMEGA TELEMETRY ALERT';
+    toastTitleEl.textContent = title;
+    toastDescEl.textContent = subtitle;
+    try {
+      if (!toastEl.matches(':popover-open')) {
+        toastEl.showPopover();
+      }
+    } catch {
+      // Ignore in headless environments
+    }
     window.clearTimeout(toastTimeout);
     toastTimeout = window.setTimeout(() => {
-      banner.hidden = true;
-    }, 3600);
-  };
+      try {
+        if (toastEl.matches(':popover-open')) {
+          toastEl.hidePopover();
+        }
+      } catch {
+        // Ignore
+      }
+    }, 4500);
+  }
+
+  let currentDraftChoices: AugmentSpec[] = [];
 
   const world = new GameWorld(profile, sound, {
+    onToast: (title, subtitle, accentColor) => showToast(title, subtitle, accentColor),
     onLevelUpDraft: (choices) => {
       currentDraftChoices = choices;
-      renderAugmentDraftChoices(choices);
+      renderAugmentChoices(choices);
+      world.paused = true;
       if (!augmentDialog.open) {
         augmentDialog.showModal();
       }
     },
     onGameOver: (victory) => {
-      renderGameOverModal(victory);
+      world.paused = true;
+      renderGameOverSummary(victory);
       if (!gameoverDialog.open) {
         gameoverDialog.showModal();
       }
     },
-    onToast: showToast,
   });
 
-  // Resize handler
-  const resizeCanvas = () => {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = Math.floor(window.innerWidth * dpr);
-    canvas.height = Math.floor(window.innerHeight * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  };
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
+  // Viewport & Canvas Dimensions
+  let viewWidth = window.innerWidth;
+  let viewHeight = window.innerHeight;
 
-  // Pause simulation whenever any modal dialog is open
-  const syncDialogPauseState = () => {
+  function handleResize(): void {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    viewWidth = viewport.clientWidth || window.innerWidth;
+    viewHeight = viewport.clientHeight || window.innerHeight;
+    canvas.width = Math.floor(viewWidth * dpr);
+    canvas.height = Math.floor(viewHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', handleResize);
+  handleResize();
+
+  // Dialog lifecycle synchronization & returnValue reset per dialog guide
+  function syncPauseState(): void {
     const anyOpen = allDialogs.some((d) => d.open);
     world.paused = anyOpen;
-  };
+  }
 
-  for (const d of allDialogs) {
-    d.addEventListener('close', () => {
-      // Reset returnValue per dialog guidance to prevent stale values leaking
-      d.returnValue = '';
-      syncDialogPauseState();
-    });
-    d.addEventListener('cancel', (event) => {
-      if (d.getAttribute('closedby') === 'none') {
-        event.preventDefault();
-        return;
-      }
-      event.preventDefault();
-      void closeTopLayer(d);
+  for (const dialog of allDialogs) {
+    dialog.addEventListener('close', () => {
+      dialog.returnValue = '';
+      syncPauseState();
     });
   }
+
+  augmentDialog.addEventListener('cancel', (e) => {
+    e.preventDefault();
+  });
 
   setupDialogClosedByFallback();
 
-  // Efficient background processing via contentvisibilityautostatechange
-  let renderSkipped = false;
-  viewport.addEventListener('contentvisibilityautostatechange', (event) => {
-    const cvEvent = event as Event & { skipped?: boolean };
-    renderSkipped = Boolean(cvEvent.skipped);
-  });
+  // ============================================================================
+  // INPUT HANDLING (KEYBOARD, MOUSE, CODON SPLICING & GAMEPAD)
+  // ============================================================================
+  const keys = new Set<string>();
+  let mouseScreenX = viewWidth * 0.5;
+  let mouseScreenY = viewHeight * 0.5;
+  let mouseDown = false;
+  let runElapsedTime = 0;
 
-  if (!('contentVisibility' in document.documentElement.style) && 'IntersectionObserver' in window) {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          renderSkipped = !entry.isIntersecting;
-        }
-      },
-      { rootMargin: '200px' }
-    );
-    observer.observe(viewport);
+  function getMoveInput(): { x: number; y: number } {
+    let x = 0;
+    let y = 0;
+    if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
+    if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
+    if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
+    if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
+    return { x, y };
   }
 
-  // Input state
-  const keys = new Set<string>();
-  const mouseScreen = { x: window.innerWidth * 0.6, y: window.innerHeight * 0.5 };
-  let mouseDownLeft = false;
+  function getAimWorldPos(): { x: number; y: number } {
+    return world.camera.screenToWorld(
+      mouseScreenX,
+      mouseScreenY,
+      viewWidth,
+      viewHeight
+    );
+  }
 
   window.addEventListener('keydown', (e) => {
     sound.unlock();
     const code = e.code;
-    keys.add(code);
 
-    // Hotkeys 1, 2, 3 inside Neural Augment draft dialog
-    if (augmentDialog.open && currentDraftChoices.length > 0) {
-      if (code === 'Digit1' && currentDraftChoices[0]) {
-        selectAugmentChoice(currentDraftChoices[0].id);
-        return;
+    if (code === 'Tab') {
+      e.preventDefault();
+      if (hangarDialog.open) {
+        void closeTopLayer(hangarDialog);
+      } else if (!allDialogs.some((d) => d.open)) {
+        renderHangarCards();
+        world.paused = true;
+        hangarDialog.showModal();
       }
-      if (code === 'Digit2' && currentDraftChoices[1]) {
-        selectAugmentChoice(currentDraftChoices[1].id);
-        return;
-      }
-      if (code === 'Digit3' && currentDraftChoices[2]) {
-        selectAugmentChoice(currentDraftChoices[2].id);
-        return;
-      }
+      return;
     }
 
-    if (world.paused || world.gameOver) return;
+    if (code === 'KeyH') {
+      if (holodeckDialog.open) {
+        void closeTopLayer(holodeckDialog);
+      } else if (!allDialogs.some((d) => d.open)) {
+        world.paused = true;
+        holodeckDialog.showModal();
+      }
+      return;
+    }
 
-    if (code === 'Space' || code === 'ShiftLeft' || code === 'ShiftRight') {
+    if (code === 'KeyU' && !allDialogs.some((d) => d.open)) {
+      renderArmory();
+      world.paused = true;
+      armoryDialog.showModal();
+      return;
+    }
+
+    if (code === 'KeyC' && !allDialogs.some((d) => d.open)) {
+      renderCodex();
+      world.paused = true;
+      codexDialog.showModal();
+      return;
+    }
+
+    if (code === 'KeyM') {
+      toggleAudioMute();
+      return;
+    }
+
+    if (code === 'KeyP' && !allDialogs.some((d) => d.open)) {
+      toggleAutoPilot();
+      return;
+    }
+
+    if (world.paused) return;
+
+    // Live AlphaGenome Codon Splicing hotkeys (1=A, 2=T, 3=G, 4=C)
+    if (code === 'Digit1') {
+      world.spliceNucleotide('A');
+      return;
+    }
+    if (code === 'Digit2') {
+      world.spliceNucleotide('T');
+      return;
+    }
+    if (code === 'Digit3') {
+      world.spliceNucleotide('G');
+      return;
+    }
+    if (code === 'Digit4') {
+      world.spliceNucleotide('C');
+      return;
+    }
+
+    keys.add(code);
+
+    if (code === 'Space') {
       e.preventDefault();
-      world.triggerDash(getMoveInputVector());
-    } else if (code === 'KeyE') {
-      const aimWorld = world.camera.screenToWorld(
-        mouseScreen.x,
-        mouseScreen.y,
-        window.innerWidth,
-        window.innerHeight
-      );
-      world.triggerAltFire(aimWorld);
-    } else if (code === 'KeyQ') {
-      world.triggerUltimate();
+      world.triggerDash(getMoveInput());
+    } else if (code === 'KeyQ' || code === 'KeyE') {
+      world.triggerAltFire(getAimWorldPos());
     } else if (code === 'KeyR') {
       world.triggerActiveVent();
-    } else if (code === 'KeyC') {
-      toggleAutoAim();
     } else if (code === 'KeyF') {
-      toggleAutoFire();
-    } else if (code === 'Escape' || code === 'KeyP') {
-      renderHangarCards();
-      if (!hangarDialog.open) {
-        hangarDialog.showModal();
-        syncDialogPauseState();
-      }
+      world.triggerUltimate();
     }
   });
 
@@ -247,133 +328,161 @@ function bootstrapGame(): void {
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    mouseScreen.x = e.clientX;
-    mouseScreen.y = e.clientY;
+    const rect = canvas.getBoundingClientRect();
+    mouseScreenX = e.clientX - rect.left;
+    mouseScreenY = e.clientY - rect.top;
   });
 
   canvas.addEventListener('pointerdown', (e) => {
     sound.unlock();
-    mouseScreen.x = e.clientX;
-    mouseScreen.y = e.clientY;
     if (e.button === 0) {
-      mouseDownLeft = true;
+      mouseDown = true;
     } else if (e.button === 2) {
-      const aimWorld = world.camera.screenToWorld(
-        mouseScreen.x,
-        mouseScreen.y,
-        window.innerWidth,
-        window.innerHeight
-      );
-      world.triggerAltFire(aimWorld);
+      world.triggerAltFire(getAimWorldPos());
     }
   });
 
   window.addEventListener('pointerup', (e) => {
-    if (e.button === 0) mouseDownLeft = false;
-  });
-
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-
-  function getMoveInputVector(): { x: number; y: number } {
-    let x = 0;
-    let y = 0;
-    if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
-    if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
-    if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
-
-    // Optional Gamepad API thumbstick support
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    const gp = gamepads[0];
-    if (gp) {
-      if (Math.abs(gp.axes[0]) > 0.18) x += gp.axes[0];
-      if (Math.abs(gp.axes[1]) > 0.18) y += gp.axes[1];
+    if (e.button === 0) {
+      mouseDown = false;
     }
-    return { x, y };
-  }
-
-  // UI Button Handlers
-  const btnMute = document.getElementById('btn-mute') as HTMLButtonElement;
-  btnMute.addEventListener('click', () => {
-    sound.unlock();
-    const isOn = sound.toggleMute();
-    btnMute.textContent = isOn ? 'AUDIO: ON' : 'AUDIO: MUTED';
-    btnMute.setAttribute('aria-pressed', String(!isOn));
   });
 
-  const btnAutoAim = document.getElementById('btn-auto-aim') as HTMLButtonElement;
-  const stateAutoAim = document.getElementById('state-auto-aim')!;
-  function toggleAutoAim(): void {
-    world.autoAim = !world.autoAim;
-    btnAutoAim.setAttribute('aria-pressed', String(world.autoAim));
-    stateAutoAim.textContent = world.autoAim ? 'ENGAGED' : 'MANUAL';
-  }
-  btnAutoAim.addEventListener('click', toggleAutoAim);
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
 
-  const btnAutoFire = document.getElementById('btn-auto-fire') as HTMLButtonElement;
-  const stateAutoFire = document.getElementById('state-auto-fire')!;
-  function toggleAutoFire(): void {
-    world.autoFire = !world.autoFire;
-    btnAutoFire.setAttribute('aria-pressed', String(world.autoFire));
-    stateAutoFire.textContent = world.autoFire ? 'ENGAGED' : 'MANUAL';
-  }
-  btnAutoFire.addEventListener('click', toggleAutoFire);
-
-  // Render Mech Hangar Cards
-  function renderHangarCards(): void {
-    const container = document.getElementById('mech-cards-grid')!;
-    container.innerHTML = '';
-
-    (Object.keys(MECH_SPECS) as MechId[]).forEach((id) => {
-      const spec = MECH_SPECS[id];
-      const card = document.createElement('div');
-      card.className = `mech-select-card ${profile.selectedMech === id ? 'is-selected' : ''}`;
-      card.style.borderColor = profile.selectedMech === id ? spec.accentColor : '';
-      card.innerHTML = `
-        <div class="mech-card-top">
-          <span class="badge-code" style="color:${spec.accentColor};border-color:${spec.accentColor}">${spec.codeName}</span>
-          <strong>${spec.title}</strong>
-        </div>
-        <div class="mech-card-role" style="color:${spec.accentColor}">${spec.role}</div>
-        <ul class="mech-Loadout-list">
-          <li><strong>HULL / AEGIS:</strong> ${spec.maxHp} HP / ${spec.maxShield} Shield</li>
-          <li><strong>PRIMARY:</strong> ${spec.primaryName} — ${spec.primaryDesc}</li>
-          <li><strong>ALT-FIRE:</strong> ${spec.altName} — ${spec.altDesc}</li>
-          <li><strong>ULTIMATE:</strong> ${spec.ultimateName} — ${spec.ultimateDesc}</li>
-        </ul>
-      `;
-      card.addEventListener('click', () => {
-        profile.selectedMech = id;
-        saveProfile(profile);
-        renderHangarCards();
-      });
-      container.appendChild(card);
+  // ============================================================================
+  // CODON SPLICER BUTTONS, BOSS-RUSH CHIPS & HOLODECK CONTROLS
+  // ============================================================================
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('.codon-splice-btn')) {
+    btn.addEventListener('click', () => {
+      sound.unlock();
+      const nuc = btn.dataset.nuc as NucleotideBase | undefined;
+      if (nuc) {
+        world.spliceNucleotide(nuc);
+      }
     });
   }
 
-  document.getElementById('btn-launch-run')!.addEventListener('click', () => {
+  for (const chip of document.querySelectorAll<HTMLButtonElement>('.boss-spawn-chip')) {
+    chip.addEventListener('click', () => {
+      sound.unlock();
+      const idx = Number(chip.dataset.boss ?? 2);
+      const bossId = BOSS_ORDER[idx] ?? 'xenofold_omega';
+      world.spawnBossEncounter(bossId);
+    });
+  }
+
+  for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-holo-mode]')) {
+    tab.addEventListener('click', () => {
+      for (const t of document.querySelectorAll<HTMLButtonElement>('[data-holo-mode]')) {
+        t.classList.remove('active-tab');
+      }
+      tab.classList.add('active-tab');
+      holodeckViewer.model =
+        tab.dataset.holoMode === 'mech'
+          ? world.mech.id === 'antigravity'
+            ? 'agy_swarm'
+            : 'helix_mech'
+          : 'kras_p01116';
+    });
+  }
+
+  const spawnKrasNowBtn = document.getElementById('btn-spawn-kras-now') as HTMLButtonElement;
+  spawnKrasNowBtn.addEventListener('click', () => {
     sound.unlock();
-    world.resetRun(profile.selectedMech);
-    void closeTopLayer(hangarDialog);
+    void closeTopLayer(holodeckDialog);
+    world.paused = false;
+    world.spawnBossEncounter('xenofold_omega');
   });
 
-  document.getElementById('btn-daily-seed')!.addEventListener('click', () => {
+  // ============================================================================
+  // HANGAR, AUGMENT DRAFT, ARMORY & CODEX UI RENDERERS
+  // ============================================================================
+  let selectedMechId: MechId = profile.selectedMech;
+  const mechSelectorEl = document.getElementById('mech-selector') as HTMLElement;
+  const sectorModeSelect = document.getElementById('sector-mode') as HTMLSelectElement;
+  const launchBtn = document.getElementById('btn-launch-run') as HTMLButtonElement;
+
+  function renderHangarCards(): void {
+    mechSelectorEl.innerHTML = '';
+    for (const mech of Object.values(MECH_SPECS)) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `mech-card ${mech.id === selectedMechId ? 'selected' : ''}`;
+      card.innerHTML = `
+        <div class="mech-card-header">
+          <span class="mech-card-name" style="color: ${mech.accentColor}">${mech.title}</span>
+          <span class="mech-card-tag">${mech.codeName} // ${mech.role}</span>
+        </div>
+        <p class="mech-card-desc">${mech.primaryDesc} ${mech.altDesc}</p>
+        <div class="mech-stats-list">
+          <span>WEAPON: <strong style="color: #f8fafc">${mech.primaryName}</strong></span>
+          <span>SPECIAL: <strong style="color: ${mech.secondaryColor}">${mech.altName}</strong></span>
+          <span>HULL / SHIELD: <strong>${mech.maxHp} / ${mech.maxShield}</strong></span>
+          <span>SPEED / DMG: <strong>${mech.moveSpeed} / ${mech.baseDamage}</strong></span>
+        </div>
+      `;
+      card.addEventListener('click', () => {
+        selectedMechId = mech.id;
+        renderHangarCards();
+      });
+      mechSelectorEl.appendChild(card);
+    }
+  }
+
+  function startConfiguredRun(): void {
+    const mode = sectorModeSelect.value;
+    world.endlessMode = mode === 'endless';
+    world.resetRun(selectedMechId);
+    runElapsedTime = 0;
+    if (mode === 'bossrush') {
+      world.spawnBossEncounter('xenofold_omega');
+    }
+    updateAbilityDockLabels();
+  }
+
+  launchBtn.addEventListener('click', () => {
     sound.unlock();
-    const todaySeed = new Date().toISOString().slice(0, 10);
-    world.resetRun(profile.selectedMech, `DAILY-${todaySeed}`);
-    showToast(`DAILY SEED SORTIE: ${todaySeed}`, 'Deterministic sector seed engaged!', '#facc15');
+    startConfiguredRun();
     void closeTopLayer(hangarDialog);
+    world.paused = false;
   });
 
-  // Render Neural Augment Level-Up Draft
-  function renderAugmentDraftChoices(choices: AugmentSpec[]): void {
-    const container = document.getElementById('augment-choices-grid')!;
-    container.innerHTML = '';
+  function updateAbilityDockLabels(): void {
+    const m = world.mech;
+    (document.getElementById('hud-mech-badge') as HTMLElement).textContent =
+      `${m.title} // ${m.codeName}`;
+    (document.getElementById('label-primary') as HTMLElement).textContent = m.primaryName;
+    (document.getElementById('label-katana') as HTMLElement).textContent = m.altName;
+    (document.getElementById('label-nova') as HTMLElement).textContent = 'ACTIVE VENT [R]';
+    (document.getElementById('label-overdrive') as HTMLElement).textContent = m.ultimateName;
+  }
 
-    choices.forEach((aug, idx) => {
+  // Augment Draft Renderer
+  const augmentChoicesEl = document.getElementById('augment-choices') as HTMLElement;
+  const rerollBtn = document.getElementById('btn-reroll-augments') as HTMLButtonElement;
+
+  const RARITY_COLORS: Record<AugmentSpec['rarity'], string> = {
+    common: '#38bdf8',
+    rare: '#a855f7',
+    epic: '#facc15',
+    overdrive: '#10b981',
+  };
+
+  function renderAugmentChoices(choices: AugmentSpec[]): void {
+    augmentChoicesEl.innerHTML = '';
+    rerollBtn.textContent = `REROLL (25 CORES // HAVE ${profile.voidCores})`;
+    rerollBtn.disabled = profile.voidCores < 25;
+
+    for (const aug of choices) {
       const currentRank = world.augmentRanks[aug.id] || 0;
-      // Check if picking this augment completes a Synergy Evolution!
-      const completesSynergy = SYNERGY_EVOLUTIONS.find(
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'augment-card';
+
+      const partnerSynergy = SYNERGY_EVOLUTIONS.find(
         (syn) =>
           syn.requiredAugments.includes(aug.id) &&
           syn.requiredAugments.some(
@@ -381,310 +490,283 @@ function bootstrapGame(): void {
           )
       );
 
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'augment-card';
-      if (idx === 0) btn.autofocus = true;
-
-      btn.innerHTML = `
-        <div class="augment-card-header">
-          <span class="augment-icon">${aug.icon}</span>
-          <span class="rarity-tag rarity-${aug.rarity}">${aug.rarity} // RANK ${currentRank + 1}/${aug.maxStacks}</span>
-        </div>
-        <h3>[${idx + 1}] ${aug.name}</h3>
-        <p style="color:#cbd5e1;font-size:0.84rem;line-height:1.45">${aug.description}</p>
-        ${
-          completesSynergy
-            ? `<div class="synergy-hint-pill">★ UNLOCKS SYNERGY: ${completesSynergy.name}</div>`
-            : ''
-        }
-      `;
-      btn.addEventListener('click', () => selectAugmentChoice(aug.id));
-      container.appendChild(btn);
-    });
-
-    const strip = document.getElementById('active-synergies-strip')!;
-    if (world.stats.unlockedSynergies.length > 0) {
-      strip.innerHTML = `<div class="synergy-hint-pill">ACTIVE EVOLUTIONS: ${world.stats.unlockedSynergies
-        .map((s) => s.name)
-        .join(' • ')}</div>`;
-    } else {
-      strip.innerHTML = '';
-    }
-  }
-
-  function selectAugmentChoice(augmentId: string): void {
-    world.applyAugment(augmentId);
-    void closeTopLayer(augmentDialog);
-  }
-
-  // Render Armory Meta-Progression Upgrades
-  function renderArmoryModal(): void {
-    document.getElementById('armory-cores-count')!.textContent = String(profile.voidCores);
-    const grid = document.getElementById('armory-grid')!;
-    grid.innerHTML = '';
-
-    for (const spec of ARMORY_UPGRADES) {
-      const rank = profile.armoryRanks[spec.id] || 0;
-      const isMax = rank >= spec.maxRank;
-      const cost = getArmoryUpgradeCost(spec, rank);
-      const canAfford = !isMax && profile.voidCores >= cost;
-
-      const card = document.createElement('div');
-      card.className = 'armory-card';
       card.innerHTML = `
         <div>
-          <div class="augment-card-header" style="margin-bottom:6px">
-            <span class="augment-icon">${spec.icon}</span>
-            <span class="badge-code">RANK ${rank} / ${spec.maxRank}</span>
+          <div class="augment-rarity" style="color: ${RARITY_COLORS[aug.rarity]}">
+            ${aug.icon} ${aug.rarity.toUpperCase()} // RANK ${currentRank + 1}/${aug.maxStacks}
           </div>
-          <h3 style="font-family:var(--font-mono);font-size:0.95rem;margin-bottom:4px">${spec.name}</h3>
-          <p style="font-size:0.8rem;color:#cbd5e1">${spec.description}</p>
+          <h3 class="augment-title">${aug.name}</h3>
+          <p class="augment-desc">${aug.description}</p>
         </div>
-        <button type="button" class="cyber-btn" ${!canAfford ? 'disabled style="opacity:0.45;cursor:not-allowed"' : ''}>
-          ${isMax ? 'MAX RANK ACHIEVED' : `UPGRADE (${cost} CORES)`}
-        </button>
+        ${
+          partnerSynergy
+            ? `<div class="augment-synergy-hint">⚡ COMPLETES SYNERGY: ${partnerSynergy.name}</div>`
+            : `<div class="augment-synergy-hint" style="opacity: 0.78">CATEGORY: ${aug.category.toUpperCase()}</div>`
+        }
       `;
 
-      const btn = card.querySelector('button')!;
-      if (canAfford) {
-        btn.addEventListener('click', () => {
-          const res = purchaseArmoryUpgrade(profile, spec.id);
-          if (res.success) {
-            sound.playLevelUp();
-            world.stats = world.applyAugment('__refresh__') ? world.stats : world.stats;
-            renderArmoryModal();
-          }
-        });
-      }
-      grid.appendChild(card);
+      card.addEventListener('click', () => {
+        world.applyAugment(aug.id);
+        void closeTopLayer(augmentDialog);
+        world.paused = false;
+      });
+      augmentChoicesEl.appendChild(card);
     }
   }
 
-  // Render Codex & Achievements Modal
-  function renderCodexModal(): void {
-    const synList = document.getElementById('codex-synergies-list')!;
-    synList.innerHTML = '';
+  rerollBtn.addEventListener('click', () => {
+    if (profile.voidCores < 25) return;
+    profile.voidCores -= 25;
+    saveProfile(profile);
+    currentDraftChoices = world.rollAugmentChoices(3);
+    if (currentDraftChoices.length > 0) {
+      renderAugmentChoices(currentDraftChoices);
+    }
+  });
+
+  // Armory Renderer
+  const armoryListEl = document.getElementById('armory-list') as HTMLElement;
+  const armoryCoresEl = document.getElementById('armory-cores-count') as HTMLElement;
+
+  function renderArmory(): void {
+    armoryCoresEl.textContent = String(profile.voidCores);
+    armoryListEl.innerHTML = '';
+
+    for (const upg of ARMORY_UPGRADES) {
+      const rank = profile.armoryRanks[upg.id] || 0;
+      const isMax = rank >= upg.maxRank;
+      const cost = getArmoryUpgradeCost(upg, rank);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'armory-card';
+      card.disabled = isMax || profile.voidCores < cost;
+
+      card.innerHTML = `
+        <div>
+          <div class="augment-rarity">${upg.icon} RANK ${rank} / ${upg.maxRank}</div>
+          <h3 class="augment-title">${upg.name}</h3>
+          <p class="augment-desc">${upg.description}</p>
+        </div>
+        <div class="augment-synergy-hint">
+          ${isMax ? 'MAX RANK ACHIEVED' : `UPGRADE COST: ${cost} VOID CORES`}
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        const res = purchaseArmoryUpgrade(profile, upg.id);
+        if (res.success) {
+          world.applyAugment('__refresh__');
+          renderArmory();
+        }
+      });
+
+      armoryListEl.appendChild(card);
+    }
+  }
+
+  // Codex & Achievements Renderer
+  const codexSynergiesEl = document.getElementById('codex-synergies') as HTMLElement;
+  const codexStatsEl = document.getElementById('codex-stats') as HTMLElement;
+  const codexAchievementsEl = document.getElementById('codex-achievements') as HTMLElement;
+
+  function renderCodex(): void {
+    codexSynergiesEl.innerHTML = '';
     for (const syn of SYNERGY_EVOLUTIONS) {
-      const a1 = AUGMENTS.find((a) => a.id === syn.requiredAugments[0])?.name ?? syn.requiredAugments[0];
-      const a2 = AUGMENTS.find((a) => a.id === syn.requiredAugments[1])?.name ?? syn.requiredAugments[1];
-      const div = document.createElement('div');
-      div.className = 'codex-item';
-      div.innerHTML = `
-        <strong style="color:${syn.bannerColor};font-family:var(--font-mono)">${syn.icon} ${syn.name}</strong>
-        <div style="font-size:0.75rem;color:#94a3b8;margin:3px 0">REQUIRES: ${a1} + ${a2}</div>
-        <p>${syn.description}</p>
+      const unlocked = world.seenSynergies.has(syn.id);
+      const a1 =
+        AUGMENTS.find((a) => a.id === syn.requiredAugments[0])?.name ?? syn.requiredAugments[0];
+      const a2 =
+        AUGMENTS.find((a) => a.id === syn.requiredAugments[1])?.name ?? syn.requiredAugments[1];
+      const item = document.createElement('div');
+      item.className = `codex-item ${unlocked ? 'unlocked' : ''}`;
+      item.innerHTML = `
+        <strong style="color: ${syn.bannerColor}">${syn.icon} ${syn.name} ${
+          unlocked ? ' // ACTIVE' : ''
+        }</strong>
+        <p style="margin: 0.2rem 0; font-size: 0.75rem; color: #cbd5e1">${syn.description}</p>
+        <small style="font-family: var(--font-mono); color: #94a3b8">REQUIRES: ${a1} + ${a2}</small>
       `;
-      synList.appendChild(div);
+      codexSynergiesEl.appendChild(item);
     }
 
-    const achList = document.getElementById('codex-achievements-list')!;
-    achList.innerHTML = '';
+    codexStatsEl.innerHTML = `
+      <div>HIGH SCORE: <strong style="color: #facc15">${profile.bestScore.toLocaleString()}</strong></div>
+      <div>HIGHEST WAVE: <strong style="color: #00f2fe">${profile.bestWave}</strong></div>
+      <div>TOTAL KILLS: <strong>${profile.totalKills.toLocaleString()}</strong></div>
+      <div>TOTAL SORTIES: <strong style="color: #ff0844">${profile.totalRuns}</strong></div>
+      <div>CODONS SPLICED: <strong style="color: #00ff87">${world.splicesCompleted}</strong></div>
+      <div>PARRY REFLECTS: <strong style="color: #b721ff">${world.parriesCount}</strong></div>
+    `;
+
+    codexAchievementsEl.innerHTML = '';
     for (const ach of ACHIEVEMENTS) {
-      const unlocked = profile.unlockedAchievements.includes(ach.id);
-      const div = document.createElement('div');
-      div.className = `codex-item ${unlocked ? 'is-unlocked' : ''}`;
-      div.innerHTML = `
-        <div style="display:flex;justify-content:space-between;font-family:var(--font-mono)">
-          <strong>${ach.icon} ${ach.title}</strong>
-          <span style="color:${unlocked ? '#facc15' : '#64748b'}">${
-        unlocked ? 'UNLOCKED' : `+${ach.rewardCores} CORES`
-      }</span>
-        </div>
-        <p style="margin-top:4px;color:#cbd5e1">${ach.description}</p>
+      const isUnlocked = profile.unlockedAchievements.includes(ach.id);
+      const item = document.createElement('div');
+      item.className = `codex-item ${isUnlocked ? 'unlocked' : ''}`;
+      item.innerHTML = `
+        <strong style="color: ${isUnlocked ? '#00ff87' : '#94a3b8'}">
+          ${ach.icon} ${ach.title} ${isUnlocked ? '✓ UNLOCKED' : '🔒 LOCKED'}
+        </strong>
+        <p style="margin: 0.2rem 0 0; font-size: 0.74rem; color: #cbd5e1">${ach.description}</p>
       `;
-      achList.appendChild(div);
+      codexAchievementsEl.appendChild(item);
     }
   }
 
-  // Render Game Over / Victory Summary Modal
-  function renderGameOverModal(victory: boolean): void {
-    const eyebrow = document.getElementById('gameover-eyebrow')!;
-    const title = document.getElementById('gameover-title')!;
-    const btnEndless = document.getElementById('btn-endless-continue') as HTMLButtonElement;
+  // Game Over Summary Renderer
+  const gameoverEyebrowEl = document.getElementById('gameover-eyebrow') as HTMLElement;
+  const gameoverTitleEl = document.getElementById('gameover-title') as HTMLElement;
+  const gameoverSummaryEl = document.getElementById('gameover-summary') as HTMLElement;
+  const retryBtn = document.getElementById('btn-retry-run') as HTMLButtonElement;
 
-    if (victory) {
-      eyebrow.textContent = 'ARCHITECT PRIME VANQUISHED // SECTOR SOVEREIGN';
-      title.textContent = 'MISSION ACCOMPLISHED: VOIDBREAKER';
-      title.style.color = '#facc15';
-      btnEndless.hidden = false;
-    } else {
-      eyebrow.textContent = 'SORTIE TELEMETRY REPORT';
-      title.textContent = 'SIGNAL LOST // MECH DESTROYED';
-      title.style.color = '#ff0844';
-      btnEndless.hidden = true;
-    }
-
-    const statsGrid = document.getElementById('gameover-stats-grid')!;
-    statsGrid.innerHTML = `
-      <div class="stat-tile"><span>FINAL SCORE</span><strong>${world.score.toLocaleString()}</strong></div>
-      <div class="stat-tile"><span>WAVE REACHED</span><strong>WAVE 0${world.wave}</strong></div>
-      <div class="stat-tile"><span>HOSTILES ELIMINATED</span><strong>${world.kills}</strong></div>
-      <div class="stat-tile"><span>MAX COMBO</span><strong>${world.maxCombo} HIT</strong></div>
-      <div class="stat-tile"><span>CORES HARVESTED</span><strong style="color:#d8b4fe">+${world.coresCollectedThisRun}</strong></div>
+  function renderGameOverSummary(victory: boolean): void {
+    gameoverEyebrowEl.textContent = victory
+      ? 'SINGULARITY CONQUERED // OMEGA CLEARANCE'
+      : 'SIGNAL LOST // HULL INTEGRITY CRITICAL';
+    gameoverTitleEl.textContent = victory ? 'VICTORY TELEMETRY REPORT' : 'SORTIE TELEMETRY REPORT';
+    gameoverSummaryEl.innerHTML = `
+      <div class="summary-stat"><span>FINAL SCORE</span><strong>${world.score.toLocaleString()}</strong></div>
+      <div class="summary-stat"><span>SECTOR REACHED</span><strong>WAVE ${world.wave}</strong></div>
+      <div class="summary-stat"><span>HOSTILES TERMINATED</span><strong>${world.kills}</strong></div>
+      <div class="summary-stat"><span>PILOT LEVEL</span><strong>LVL ${world.level}</strong></div>
+      <div class="summary-stat"><span>SYNERGIES EVOLVED</span><strong>${world.seenSynergies.size}</strong></div>
+      <div class="summary-stat"><span>VOID CORES BANKED</span><strong>${profile.voidCores}</strong></div>
     `;
   }
 
-  document.getElementById('btn-play-again')!.addEventListener('click', () => {
-    world.resetRun(profile.selectedMech);
+  retryBtn.addEventListener('click', () => {
     void closeTopLayer(gameoverDialog);
+    startConfiguredRun();
+    world.paused = false;
   });
 
-  document.getElementById('btn-endless-continue')!.addEventListener('click', () => {
-    world.endlessMode = true;
-    world.gameOver = false;
-    world.running = true;
-    world.wave++;
-    void closeTopLayer(gameoverDialog);
+  // Audio Mute & Auto-Pilot Buttons
+  const muteBtn = document.getElementById('btn-mute') as HTMLButtonElement;
+  function toggleAudioMute(): void {
+    const nextMuted = !sound.toggleMute();
+    muteBtn.setAttribute('aria-pressed', String(!nextMuted));
+    muteBtn.textContent = !nextMuted ? 'AUDIO: MUTED [M]' : 'AUDIO: ON [M]';
+  }
+  muteBtn.addEventListener('click', () => {
+    sound.unlock();
+    toggleAudioMute();
   });
 
-  document.getElementById('btn-gameover-armory')!.addEventListener('click', () => {
-    void closeTopLayer(gameoverDialog).then(() => {
-      renderArmoryModal();
-      armoryDialog.showModal();
-    });
+  const autoPilotBtn = document.getElementById('btn-autopilot') as HTMLButtonElement;
+  function toggleAutoPilot(): void {
+    world.autoAim = !world.autoAim;
+    world.autoFire = world.autoAim;
+    autoPilotBtn.classList.toggle('active', world.autoAim);
+    autoPilotBtn.textContent = world.autoAim ? 'AI PILOT: ENGAGED [P]' : 'AI PILOT: OFF [P]';
+    if (world.autoAim) {
+      showToast(
+        'AUTONOMOUS AI SWARM PILOT',
+        'AI Pilot is auto-targeting hostiles, venting weapon heat & assisting combat.'
+      );
+    }
+  }
+  autoPilotBtn.addEventListener('click', () => {
+    sound.unlock();
+    toggleAutoPilot();
   });
 
-  // Sync Armory & Codex content whenever opened
+  // Refresh Armory & Codex whenever opened via declarative Invoker Commands
   const observer = new MutationObserver(() => {
-    if (armoryDialog.open) renderArmoryModal();
-    if (codexDialog.open) renderCodexModal();
     if (hangarDialog.open) renderHangarCards();
-    syncDialogPauseState();
+    if (armoryDialog.open) renderArmory();
+    if (codexDialog.open) renderCodex();
+    syncPauseState();
   });
-  for (const d of allDialogs) {
-    observer.observe(d, { attributes: true, attributeFilter: ['open'] });
+  for (const dialog of allDialogs) {
+    observer.observe(dialog, { attributes: true, attributeFilter: ['open'] });
   }
 
-  // HUD DOM elements cache
-  const elMechCode = document.getElementById('hud-mech-code')!;
-  const elMechName = document.getElementById('hud-mech-name')!;
-  const elLevel = document.getElementById('hud-level')!;
-  const elHpText = document.getElementById('hud-hp-text')!;
-  const elHpFill = document.getElementById('hud-hp-fill')!;
-  const elShieldText = document.getElementById('hud-shield-text')!;
-  const elShieldFill = document.getElementById('hud-shield-fill')!;
-  const elHeatState = document.getElementById('hud-heat-state')!;
-  const elHeatFill = document.getElementById('hud-heat-fill')!;
-  const elWaveTitle = document.getElementById('hud-wave-title')!;
-  const elXpFill = document.getElementById('hud-xp-fill')!;
-  const elBossHud = document.getElementById('boss-hud')!;
-  const elBossName = document.getElementById('boss-name')!;
-  const elBossSub = document.getElementById('boss-subtitle')!;
-  const elBossHpFill = document.getElementById('boss-hp-fill')!;
-  const elComboText = document.getElementById('hud-combo-text')!;
-  const elStyleRank = document.getElementById('hud-style-rank')!;
-  const elScore = document.getElementById('hud-score')!;
-  const elKills = document.getElementById('hud-kills')!;
-  const elCores = document.getElementById('hud-cores')!;
-  const elCdDash = document.getElementById('cd-dash')!;
-  const elLabelAlt = document.getElementById('label-alt')!;
-  const elCdAlt = document.getElementById('cd-alt')!;
-  const elLabelUlt = document.getElementById('label-ult')!;
-  const elCdUlt = document.getElementById('cd-ult')!;
+  // ============================================================================
+  // HUD TELEMETRY & RADAR SYNC
+  // ============================================================================
+  const hpTextEl = document.getElementById('hud-hp-text') as HTMLElement;
+  const hpBarEl = document.getElementById('hud-hp-bar') as HTMLElement;
+  const shieldTextEl = document.getElementById('hud-shield-text') as HTMLElement;
+  const shieldBarEl = document.getElementById('hud-shield-bar') as HTMLElement;
+  const heatStatusEl = document.getElementById('hud-heat-status') as HTMLElement;
+  const heatBarEl = document.getElementById('hud-heat-bar') as HTMLElement;
+  const xpTextEl = document.getElementById('hud-xp-text') as HTMLElement;
+  const xpBarEl = document.getElementById('hud-xp-bar') as HTMLElement;
+  const pilotLevelEl = document.getElementById('hud-pilot-level') as HTMLElement;
+  const waveLabelEl = document.getElementById('hud-wave-label') as HTMLElement;
+  const timerEl = document.getElementById('hud-timer') as HTMLElement;
+  const bossHudEl = document.getElementById('boss-hud') as HTMLElement;
+  const bossNameEl = document.getElementById('boss-name') as HTMLElement;
+  const bossPhaseEl = document.getElementById('boss-phase') as HTMLElement;
+  const bossHpBarEl = document.getElementById('boss-hp-bar') as HTMLElement;
+  const bossSubtitleEl = document.getElementById('boss-subtitle') as HTMLElement;
+  const synergyStripEl = document.getElementById('synergy-strip') as HTMLElement;
+  const scoreEl = document.getElementById('hud-score') as HTMLElement;
+  const comboEl = document.getElementById('hud-combo') as HTMLElement;
+  const styleRankEl = document.getElementById('hud-style-rank') as HTMLElement;
+  const coresEl = document.getElementById('hud-cores') as HTMLElement;
+  const agentsEl = document.getElementById('hud-agents') as HTMLElement;
+  const killsEl = document.getElementById('hud-kills') as HTMLElement;
 
-  function updateHudDOM(): void {
-    elMechCode.textContent = world.mech.codeName;
-    elMechName.textContent = world.mech.title;
-    elLevel.textContent = `LVL ${String(world.level).padStart(2, '0')}`;
+  const codonSlotEls = [
+    document.getElementById('codon-slot-0') as HTMLElement,
+    document.getElementById('codon-slot-1') as HTMLElement,
+    document.getElementById('codon-slot-2') as HTMLElement,
+  ];
+  const codonActiveLabelEl = document.getElementById('codon-active-label') as HTMLElement;
 
-    elHpText.textContent = `${Math.ceil(world.hp)} / ${world.maxHp}`;
-    elHpFill.style.width = `${Math.max(0, (world.hp / world.maxHp) * 100)}%`;
+  const cdKatanaEl = document.getElementById('cd-katana') as HTMLElement;
+  const cdDashEl = document.getElementById('cd-dash') as HTMLElement;
+  const cdNovaEl = document.getElementById('cd-nova') as HTMLElement;
+  const cdOverdriveEl = document.getElementById('cd-overdrive') as HTMLElement;
 
-    elShieldText.textContent = `${Math.ceil(world.shield)} / ${world.maxShield}`;
-    elShieldFill.style.width = `${Math.max(0, (world.shield / world.maxShield) * 100)}%`;
-
-    elHeatFill.style.width = `${world.heat}%`;
-    if (world.overheatedLockout > 0) {
-      elHeatState.textContent = 'OVERHEATED!';
-      elHeatState.style.color = '#ff0844';
-    } else if (world.overchargeTimer > 0) {
-      elHeatState.textContent = 'OVERCHARGED!';
-      elHeatState.style.color = '#facc15';
-    } else if (world.heat >= 65 && world.heat <= 80) {
-      elHeatState.textContent = 'PRESS [R] SWEET-SPOT!';
-      elHeatState.style.color = '#00f2fe';
-    } else {
-      elHeatState.textContent = `${Math.round(world.heat)}%`;
-      elHeatState.style.color = '#94a3b8';
-    }
-
-    const sectorNum = Math.min(3, Math.ceil(world.wave / 3));
-    elWaveTitle.textContent =
-      world.witchTimeTimer > 0
-        ? `⏳ TACHYON WITCH-TIME // ${world.witchTimeTimer.toFixed(1)}s`
-        : `SECTOR 0${sectorNum} // WAVE 0${world.wave}`;
-    elXpFill.style.width = `${Math.min(100, (world.xp / world.xpToNext) * 100)}%`;
-
-    if (world.boss) {
-      elBossHud.hidden = false;
-      elBossName.textContent = `${world.boss.name} [PHASE ${world.boss.phase}]`;
-      elBossSub.textContent = world.boss.subtitle;
-      elBossHpFill.style.width = `${Math.max(0, (world.boss.hp / world.boss.maxHp) * 100)}%`;
-    } else {
-      elBossHud.hidden = true;
-    }
-
-    const rank = world.getStyleRank();
-    elStyleRank.textContent = rank;
-    elStyleRank.setAttribute('data-rank', rank);
-    elComboText.textContent = `${world.combo} HIT COMBO`;
-
-    elScore.textContent = world.score.toLocaleString();
-    elKills.textContent = String(world.kills);
-    elCores.textContent = String(profile.voidCores);
-
-    elCdDash.textContent =
-      world.dashCooldown > 0 ? `${world.dashCooldown.toFixed(1)}s` : 'READY';
-    elLabelAlt.textContent = world.mech.altName.split(' (')[0].toUpperCase();
-    elCdAlt.textContent =
-      world.altCooldown > 0 ? `${world.altCooldown.toFixed(1)}s` : 'READY';
-    elLabelUlt.textContent = world.mech.ultimateName.split(' (')[0];
-    elCdUlt.textContent =
-      world.ultimateCharge >= 100
-        ? '100% READY [Q]'
-        : `${Math.floor(world.ultimateCharge)}%`;
-  }
-
-  function renderRadarMinimap(): void {
+  function renderTacticalRadar(): void {
     const rw = radarCanvas.width;
     const rh = radarCanvas.height;
-    radarCtx.clearRect(0, 0, rw, rh);
+    const cx = rw * 0.5;
+    const cy = rh * 0.5;
+    const scale = (rw * 0.44) / 1400;
 
-    // Radar grid crosshairs
-    radarCtx.strokeStyle = 'rgba(0, 242, 254, 0.18)';
+    radarCtx.clearRect(0, 0, rw, rh);
+    radarCtx.strokeStyle = 'rgba(0, 242, 254, 0.2)';
     radarCtx.lineWidth = 1;
     radarCtx.beginPath();
-    radarCtx.moveTo(rw * 0.5, 0);
-    radarCtx.lineTo(rw * 0.5, rh);
-    radarCtx.moveTo(0, rh * 0.5);
-    radarCtx.lineTo(rw, rh * 0.5);
+    radarCtx.arc(cx, cy, rw * 0.24, 0, Math.PI * 2);
     radarCtx.stroke();
 
-    const sx = rw / world.arenaWidth;
-    const sy = rh / world.arenaHeight;
+    const sweepAngle = performance.now() * 0.0025;
+    radarCtx.strokeStyle = 'rgba(0, 242, 254, 0.35)';
+    radarCtx.beginPath();
+    radarCtx.moveTo(cx, cy);
+    radarCtx.lineTo(
+      cx + Math.cos(sweepAngle) * (rw * 0.45),
+      cy + Math.sin(sweepAngle) * (rh * 0.45)
+    );
+    radarCtx.stroke();
 
-    // Shards
-    radarCtx.fillStyle = '#b721ff';
-    for (const s of world.shards) {
-      if (s.voidCore > 0) {
-        radarCtx.fillRect(s.pos.x * sx - 1.5, s.pos.y * sy - 1.5, 3, 3);
-      }
+    radarCtx.fillStyle = '#00ff87';
+    for (const agent of world.subAgents) {
+      const dx = (agent.pos.x - world.playerPos.x) * scale;
+      const dy = (agent.pos.y - world.playerPos.y) * scale;
+      radarCtx.fillRect(cx + dx - 1.5, cy + dy - 1.5, 3, 3);
     }
 
-    // Enemies
-    for (const e of world.enemies) {
-      radarCtx.fillStyle = e.type === 'pylon' ? '#00f2fe' : '#ff2a85';
-      radarCtx.fillRect(e.pos.x * sx - 1.5, e.pos.y * sy - 1.5, 3, 3);
+    for (const enemy of world.enemies) {
+      const dx = (enemy.pos.x - world.playerPos.x) * scale;
+      const dy = (enemy.pos.y - world.playerPos.y) * scale;
+      if (dx * dx + dy * dy > rw * 0.45 * (rw * 0.45)) continue;
+      radarCtx.fillStyle = enemy.type === 'juggernaut' ? '#facc15' : '#ff0844';
+      radarCtx.fillRect(cx + dx - 1.5, cy + dy - 1.5, 3, 3);
     }
 
-    // Boss
     if (world.boss) {
-      radarCtx.fillStyle = '#facc15';
+      const dx = (world.boss.pos.x - world.playerPos.x) * scale;
+      const dy = (world.boss.pos.y - world.playerPos.y) * scale;
+      radarCtx.fillStyle = world.boss.id === 'xenofold_omega' ? '#00ff87' : '#f43f5e';
       radarCtx.beginPath();
       radarCtx.arc(
-        world.boss.pos.x * sx,
-        world.boss.pos.y * sy,
+        Math.max(6, Math.min(rw - 6, cx + dx)),
+        Math.max(6, Math.min(rh - 6, cy + dy)),
         4.5,
         0,
         Math.PI * 2
@@ -692,59 +774,184 @@ function bootstrapGame(): void {
       radarCtx.fill();
     }
 
-    // Player
     radarCtx.fillStyle = '#00f2fe';
     radarCtx.beginPath();
-    radarCtx.arc(
-      world.playerPos.x * sx,
-      world.playerPos.y * sy,
-      3.5,
-      0,
-      Math.PI * 2
-    );
+    radarCtx.arc(cx, cy, 3, 0, Math.PI * 2);
     radarCtx.fill();
   }
 
-  // Open Mech Hangar on initial boot so the player can pick their Cyber-Frame or immediately press Enter/Click
-  renderHangarCards();
-  hangarDialog.showModal();
-  syncDialogPauseState();
+  function updateHud(): void {
+    hpTextEl.textContent = `${Math.ceil(world.hp)} / ${Math.ceil(world.maxHp)}`;
+    hpBarEl.style.width = `${Math.max(0, Math.min(100, (world.hp / world.maxHp) * 100))}%`;
 
-  // Main 60-120 FPS Animation Loop
+    shieldTextEl.textContent = `${Math.ceil(world.shield)} / ${Math.ceil(world.maxShield)}`;
+    shieldBarEl.style.width = `${Math.max(0, Math.min(100, (world.shield / world.maxShield) * 100))}%`;
+
+    heatBarEl.style.width = `${Math.max(0, Math.min(100, world.heat))}%`;
+    if (world.overheatedLockout > 0) {
+      heatStatusEl.textContent = 'OVERHEATED';
+      heatStatusEl.style.color = '#ff0844';
+    } else if (world.overchargeTimer > 0) {
+      heatStatusEl.textContent = `OVERCHARGED (${world.overchargeTimer.toFixed(1)}s)`;
+      heatStatusEl.style.color = '#00ff87';
+    } else if (world.heat >= 65 && world.heat <= 80) {
+      heatStatusEl.textContent = 'SWEET-SPOT [PRESS R!]';
+      heatStatusEl.style.color = '#facc15';
+    } else {
+      heatStatusEl.textContent = `${Math.round(world.heat)}%`;
+      heatStatusEl.style.color = '#00f2fe';
+    }
+
+    xpTextEl.textContent = `${Math.floor(world.xp)} / ${world.xpToNext}`;
+    xpBarEl.style.width = `${Math.max(0, Math.min(100, (world.xp / world.xpToNext) * 100))}%`;
+    pilotLevelEl.textContent = `LVL ${world.level}`;
+
+    waveLabelEl.textContent = `SECTOR ${String(world.wave).padStart(2, '0')} // ${
+      world.endlessMode ? 'ENDLESS' : 'SINGULARITY'
+    }`;
+    const mins = Math.floor(runElapsedTime / 60);
+    const secs = Math.floor(runElapsedTime % 60);
+    timerEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+
+    if (world.boss) {
+      bossHudEl.hidden = false;
+      bossNameEl.textContent = `${world.boss.name} // ${world.boss.subtitle}`;
+      bossPhaseEl.textContent = `PHASE ${world.boss.phase}`;
+      bossHpBarEl.style.width = `${Math.max(
+        0,
+        Math.min(100, (world.boss.hp / world.boss.maxHp) * 100)
+      )}%`;
+      bossSubtitleEl.textContent =
+        world.boss.id === 'xenofold_omega'
+          ? 'ALPHAFOLD P01116 3D BOSS — TARGET G12C P-LOOP (300% CRIT) & SWITCH-II POCKET (225% CRIT)'
+          : 'HIGH-THREAT DREADNOUGHT — PARRY BULLET CURTAINS & STRIKE DURING WITCH-TIME';
+    } else {
+      bossHudEl.hidden = true;
+    }
+
+    // Update AlphaGenome Codon Splicer HUD
+    for (let i = 0; i < 3; i++) {
+      const nuc = world.codonBuffer[i];
+      const slot = codonSlotEls[i];
+      slot.textContent = nuc ?? '-';
+      slot.className = `codon-slot ${nuc ? `nuc-${nuc}` : ''}`;
+    }
+    codonActiveLabelEl.textContent = `LAST SPLICE: ${world.lastCodonTriggered} [KEYS 1-4]`;
+
+    scoreEl.textContent = world.score.toLocaleString();
+    comboEl.textContent = `${Math.max(1, world.combo)}x`;
+    const rankKey = world.getStyleRank();
+    const rankMeta = STYLE_RANK_INFO[rankKey];
+    styleRankEl.textContent = `${rankKey} // ${rankMeta.label}`;
+    styleRankEl.className = `style-rank ${rankMeta.cssClass}`;
+
+    coresEl.textContent = String(profile.voidCores);
+    agentsEl.textContent = String(world.subAgents.length);
+    killsEl.textContent = String(world.kills);
+
+    cdKatanaEl.style.width = `${Math.max(
+      0,
+      Math.min(100, (1 - world.altCooldown / Math.max(0.2, world.mech.altCooldown)) * 100)
+    )}%`;
+    cdDashEl.style.width = `${Math.max(
+      0,
+      Math.min(100, (1 - world.dashCooldown / Math.max(0.2, world.mech.dashCooldown)) * 100)
+    )}%`;
+    cdNovaEl.style.width = `${Math.max(0, Math.min(100, world.heat))}%`;
+    cdOverdriveEl.style.width =
+      world.ultimateActiveTimer > 0
+        ? `${(world.ultimateActiveTimer / 5.0) * 100}%`
+        : `${Math.min(100, world.ultimateCharge)}%`;
+
+    if (synergyStripEl.childElementCount !== world.seenSynergies.size) {
+      synergyStripEl.innerHTML = '';
+      for (const synId of world.seenSynergies) {
+        const syn = SYNERGY_EVOLUTIONS.find((s) => s.id === synId);
+        if (syn) {
+          const badge = document.createElement('span');
+          badge.className = 'synergy-badge';
+          badge.textContent = `${syn.icon} ${syn.name}`;
+          synergyStripEl.appendChild(badge);
+        }
+      }
+    }
+
+    renderTacticalRadar();
+  }
+
+  // ============================================================================
+  // MAIN GAMEPAD + 60FPS ANIMATION LOOP
+  // ============================================================================
+  function pollGamepadAndAI(): { move: { x: number; y: number }; aim: { x: number; y: number } } {
+    let move = getMoveInput();
+    let aim = getAimWorldPos();
+
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const pad = pads[0];
+    if (pad && !world.paused) {
+      const lx = pad.axes[0] || 0;
+      const ly = pad.axes[1] || 0;
+      if (Math.hypot(lx, ly) > 0.22) {
+        move = { x: lx, y: ly };
+      }
+
+      const rx = pad.axes[2] || 0;
+      const ry = pad.axes[3] || 0;
+      if (Math.hypot(rx, ry) > 0.25) {
+        aim = {
+          x: world.playerPos.x + rx * 350,
+          y: world.playerPos.y + ry * 350,
+        };
+      }
+
+      if (pad.buttons[7]?.pressed) mouseDown = true;
+      if (pad.buttons[6]?.pressed) world.triggerAltFire(aim);
+      if (pad.buttons[0]?.pressed) world.triggerDash(move);
+      if (pad.buttons[2]?.pressed) world.triggerActiveVent();
+      if (pad.buttons[5]?.pressed) world.triggerUltimate();
+    }
+
+    // Autonomous AI Swarm Pilot movement + sweet-spot venting when enabled
+    if (world.autoAim && !world.paused) {
+      if (world.heat >= 66 && world.heat <= 79) {
+        world.triggerActiveVent();
+      }
+      if (move.x === 0 && move.y === 0) {
+        const t = performance.now() * 0.0018;
+        move = { x: Math.cos(t), y: Math.sin(t * 1.3) };
+      }
+    }
+
+    return { move, aim };
+  }
+
   let lastTime = performance.now();
   function frame(now: number): void {
-    const rawDt = (now - lastTime) / 1000;
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
     lastTime = now;
 
-    if (!renderSkipped && !document.hidden) {
-      const aimWorld = world.camera.screenToWorld(
-        mouseScreen.x,
-        mouseScreen.y,
-        window.innerWidth,
-        window.innerHeight
-      );
-      world.update(
-        rawDt,
-        getMoveInputVector(),
-        aimWorld,
-        mouseDownLeft,
-        window.innerWidth,
-        window.innerHeight
-      );
-      world.render(ctx, window.innerWidth, window.innerHeight);
-      updateHudDOM();
-      renderRadarMinimap();
+    const { move, aim } = pollGamepadAndAI();
+    if (!world.paused && !world.gameOver) {
+      runElapsedTime += dt;
     }
+
+    world.update(dt, move, aim, mouseDown, viewWidth, viewHeight);
+    world.render(ctx, viewWidth, viewHeight);
+    if (holodeckDialog.open) {
+      holodeckViewer.render(dt);
+    }
+    updateHud();
 
     requestAnimationFrame(frame);
   }
+
+  // Open Hangar on initial boot so the pilot can choose their Cyber-Frame or inspect the 3D KRAS-G12C Holodeck
+  renderHangarCards();
+  updateAbilityDockLabels();
+  world.paused = true;
+  hangarDialog.showModal();
+
   requestAnimationFrame(frame);
 }
 
-if (typeof document !== 'undefined') {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bootstrapGame);
-  } else {
-    bootstrapGame();
-  }
-}
+bootstrapGame();
