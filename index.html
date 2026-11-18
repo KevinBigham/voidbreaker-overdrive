@@ -3,147 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Argon 10-Game Studio — 10 Original Games Built on Open-Source Design Principles</title>
-    <link rel="stylesheet" href="/src/styles/arcade-hub.css" />
+    <title>IRONBREAKER // DOMINO FOUNDRY — Tactical Chain-Reaction Diorama</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html, body, #app {
+        width: 100%;
+        height: 100dvh;
+        overflow: hidden;
+        background: #120f0d;
+        color: #fef3c7;
+        font-family: "Inter", system-ui, -apple-system, sans-serif;
+      }
+    </style>
   </head>
   <body>
-    <a href="#main-content" class="skip-link visually-hidden">Skip to main content</a>
-
-    <div id="hub-live-announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
-
-    <header class="hub-header">
-      <div class="hub-header-top">
-        <div class="hub-brand">
-          <span class="hub-badge">ARGON 10X STUDIO</span>
-          <h1 class="hub-title">Argon 10-Game Arcade Collection</h1>
-        </div>
-
-        <div class="hub-toolbar">
-          <button type="button" id="btn-show-catalog" class="hub-btn" aria-pressed="true">
-            ⊞ All 10 Games Catalog
-          </button>
-
-          <div class="hub-seed-group">
-            <label for="hub-seed-input">SEED:</label>
-            <input
-              type="number"
-              id="hub-seed-input"
-              class="hub-seed-input"
-              value="20261105"
-              min="1"
-              step="1"
-            />
-            <button type="button" id="btn-apply-seed" class="hub-btn">
-              Apply Seed
-            </button>
-          </div>
-
-          <button type="button" id="btn-toggle-debug" class="hub-btn" aria-pressed="false">
-            Debug: OFF [D]
-          </button>
-
-          <button
-            type="button"
-            class="hub-btn"
-            commandfor="design-contract-dialog"
-            command="show-modal"
-          >
-            📋 Design Contract
-          </button>
-
-          <button
-            type="button"
-            class="hub-btn"
-            commandfor="twelve-rules-popover"
-            command="toggle-popover"
-          >
-            ★ 12 Design Rules
-          </button>
-
-          <a
-            id="btn-open-standalone"
-            class="hub-btn hub-link-btn"
-            href="./games/01-one-more-season/index.html"
-            target="_blank"
-            rel="noopener"
-            hidden
-          >
-            ↗ Open Standalone
-          </a>
-        </div>
-      </div>
-
-      <nav aria-label="Argon 10-Game Quick Switcher">
-        <ul id="hub-nav-list" class="hub-nav-list"></ul>
-      </nav>
-    </header>
-
-    <div id="twelve-rules-popover" class="hub-popover" popover>
-      <h2>The 12 Open-Source Fun Principles</h2>
-      <ol>
-        <li><strong>One-sentence core loop</strong> — clear &amp; immediate.</li>
-        <li><strong>Playable in 5 seconds</strong> — first input on screen 1.</li>
-        <li><strong>Consequential tradeoffs</strong> — competing uses of scarce resources.</li>
-        <li><strong>Visible world feedback</strong> — bottlenecks, flow &amp; juice.</li>
-        <li><strong>Short goal + long goal</strong> — clear milestone + endless mastery.</li>
-        <li><strong>Tunable difficulty curve</strong> — fast ramp, smooth cap.</li>
-        <li><strong>Familiar genre + one twist</strong> — fresh spatial/system tension.</li>
-        <li><strong>Progressive reveal</strong> — new capabilities unlock new verbs.</li>
-        <li><strong>Honest explanations</strong> — recaps trace directly to logged events.</li>
-        <li><strong>Short runs, permanent learning</strong> — mistakes teach strategy.</li>
-        <li><strong>Versioned local persistence</strong> — reload never double-rewards.</li>
-        <li><strong>Pure simulation boundary</strong> — deterministic seeded RNG.</li>
-      </ol>
-    </div>
-
-    <dialog
-      id="design-contract-dialog"
-      class="hub-dialog"
-      closedby="any"
-      aria-labelledby="dialog-contract-title"
-    >
-      <div class="hub-dialog-header">
-        <h2 id="dialog-contract-title" class="hub-dialog-title">Game Design Contract</h2>
-        <button
-          type="button"
-          class="hub-btn"
-          commandfor="design-contract-dialog"
-          command="close"
-        >
-          Close [Esc]
-        </button>
-      </div>
-      <div id="contract-dialog-body" class="hub-dialog-body"></div>
-    </dialog>
-
-    <main id="main-content" class="hub-main" tabindex="-1">
-      <section id="hub-catalog-section" class="hub-catalog-section">
-        <div class="hub-hero-banner">
-          <div>
-            <h2 class="hub-hero-title">10 Original Argon Games — Built &amp; Verified Overnight</h2>
-            <p class="hub-hero-sub">
-              Every game below was built by an independent Gemini 4 Argon subagent with a pure deterministic simulation boundary, seeded PRNG, versioned save recovery, WebAudio procedural sound synthesis, and an automated Vitest verification suite. Click any game to play inline or launch its standalone tab.
-            </p>
-          </div>
-          <div>
-            <a class="hub-btn hub-link-btn" href="./voidbreaker.html">
-              ⚡ Legacy Vault: Voidbreaker Omega
-            </a>
-          </div>
-        </div>
-
-        <ul id="hub-catalog-grid" class="hub-grid" role="list"></ul>
-      </section>
-
-      <section id="hub-stage-wrapper" class="hub-stage-wrapper" hidden>
-        <div id="hub-stage-mount" class="hub-stage-mount"></div>
-      </section>
-    </main>
-
-    <footer class="hub-footer">
-      Argon 10-Game Studio · 10 Independent Argon Agents · 100% Original Code &amp; Procedural Assets · Seeded &amp; Verified with Vitest
-    </footer>
-
-    <script type="module" src="/src/arcade-hub.ts"></script>
+    <main id="app"></main>
+    <script type="module">
+      import { mountGame } from '/games/14-iron-domino/src/index.ts';
+      mountGame(document.getElementById('app'));
+    </script>
   </body>
 </html>

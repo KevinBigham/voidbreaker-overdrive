@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Aegis: Volt-Lash — Kinetic Tether-Parry &amp; Redline Surge Arena</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #02050d;
+        color: #f8fafc;
+        min-block-size: 100dvh;
+      }
+      .top-return-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-block: 6px;
+        padding-inline: 16px;
+        background: #060b19;
+        border-block-end: 1px solid #1e293b;
+        font-family: 'Inter', system-ui, sans-serif;
+        font-size: 0.78rem;
+      }
+      .top-return-bar a {
+        color: #38bdf8;
+        text-decoration: none;
+        font-weight: 800;
+      }
+      #volt-lash-root {
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top-return-bar">
+      <a href="./index.html">← Argon Studio Hub</a>
+      <span>⚡ AEGIS: VOLT-LASH // KINETIC TETHER-PARRY &amp; REDLINE SURGE ARENA (#13)</span>
+    </header>
+    <main id="volt-lash-root"></main>
+    <script type="module">
+      import { mountGame } from './games/13-aegis-volt-lash/src/index.ts';
+      const root = document.getElementById('volt-lash-root');
+      if (root) {
+        mountGame(root);
+      }
+    </script>
+  </body>
+</html>

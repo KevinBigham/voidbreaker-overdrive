@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CRUCIBLE PRESS // ALCHEMICAL WORKBENCH</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html, body, #app {
+        width: 100%;
+        height: 100dvh;
+        overflow: hidden;
+        background: #1c1613;
+        color: #f4ece1;
+        font-family: "Georgia", serif;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app" aria-label="Crucible Press Alchemical Workbench"></main>
+    <script type="module">
+      import { mountGame } from '/games/14-crucible-press/src/index.ts';
+      mountGame(document.getElementById('app'));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BRASS CASCADE // TACTILE SPATIAL DOMINO TACTICS</title>
+    <style>
+      @layer reset, base;
+      @layer reset {
+        html, body, #app {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+          width: 100%;
+          height: 100dvh;
+          overflow: hidden;
+          background: #070A0F;
+          color: #F6C868;
+          font-family: "JetBrains Mono", "SF Mono", system-ui, monospace;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app" aria-label="Brass Cascade Spatial Tactics Board"></main>
+    <script type="module">
+      import { mountGame } from '/games/14-brass-cascade/src/index.ts';
+      mountGame(document.getElementById('app'));
+    </script>
+  </body>
+</html>

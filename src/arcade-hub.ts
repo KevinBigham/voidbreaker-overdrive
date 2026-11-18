@@ -9,6 +9,29 @@ import * as game07 from '../games/07-merge-kitchen/src/index';
 import * as game08 from '../games/08-orbit-stack/src/index';
 import * as game09 from '../games/09-belt-and-bolt/src/index';
 import * as game10 from '../games/10-ten-floors-down/src/index';
+import * as gameParadoxProtocol from '../games/11-paradox-protocol/src/index';
+import * as game11 from '../games/11-keystone-forge/src/index';
+import * as gameMetaphysicalDeli from '../games/11-metaphysical-deli/src/index';
+import * as game12 from '../games/12-hypernova-chronovalkyrie/src/index';
+import * as gameChronoSyndicate from '../games/12-chrono-syndicate/src/index';
+import * as gameChronoVortex from '../games/12-chrono-vortex/src/index';
+import * as gameEventHorizon from '../games/12-event-horizon/src/index';
+import * as gameAstralPinball from '../games/12-astral-pinball/src/index';
+import * as gameAegisZero from '../games/13-aegis-zero/src/index';
+import * as gameVoltLash from '../games/13-aegis-volt-lash/src/index';
+import * as gameSnapback from '../games/13-snapback/src/index';
+import * as gameCathodeRoulette from '../games/14-cathode-roulette/src/index';
+
+export const FLAGSHIP_PARADOX_GAME: ArgonGameModule = gameParadoxProtocol;
+export const FLAGSHIP_HYPERNOVA_GAME: ArgonGameModule = game12;
+export const FLAGSHIP_CHRONO_GAME: ArgonGameModule = gameChronoSyndicate;
+export const FLAGSHIP_CHRONO_VORTEX_GAME: ArgonGameModule = gameChronoVortex;
+export const FLAGSHIP_EVENT_HORIZON_GAME: ArgonGameModule = gameEventHorizon;
+export const FLAGSHIP_OROBOROS_GAME: ArgonGameModule = gameAstralPinball;
+export const FLAGSHIP_AEGIS_ZERO_GAME: ArgonGameModule = gameAegisZero;
+export const FLAGSHIP_VOLT_LASH_GAME: ArgonGameModule = gameVoltLash;
+export const FLAGSHIP_SNAPBACK_GAME: ArgonGameModule = gameSnapback;
+export const FLAGSHIP_CATHODE_ROULETTE_GAME: ArgonGameModule = gameCathodeRoulette;
 
 // 1. Conditionally load Invoker Commands & Popover polyfills per declarative-dialog-popover-control
 if (typeof HTMLButtonElement !== 'undefined' && !('commandForElement' in HTMLButtonElement.prototype)) {
@@ -63,9 +86,12 @@ export interface ArcadeHubController {
 export function mountArcadeHub(rootContainer: HTMLElement = document.body): ArcadeHubController {
   let activeGameId: string | null = null;
   let activeInstance: ArgonGameInstance | null = null;
+  let featuredKeystoneInstance: ArgonGameInstance | null = null;
   let debugEnabled = false;
 
   const navList = rootContainer.querySelector<HTMLUListElement>('#hub-nav-list');
+  const featuredSection = rootContainer.querySelector<HTMLElement>('#featured-keystone-section');
+  const featuredMount = rootContainer.querySelector<HTMLElement>('#featured-keystone-mount');
   const catalogSection = rootContainer.querySelector<HTMLElement>('#hub-catalog-section');
   const catalogGrid = rootContainer.querySelector<HTMLUListElement>('#hub-catalog-grid');
   const stageWrapper = rootContainer.querySelector<HTMLElement>('#hub-stage-wrapper');
@@ -134,11 +160,40 @@ export function mountArcadeHub(rootContainer: HTMLElement = document.body): Arca
     }
   }
 
+  function cleanupFeaturedKeystone(): void {
+    if (featuredKeystoneInstance) {
+      try {
+        featuredKeystoneInstance.destroy();
+      } catch (err) {
+        console.error('Error destroying featured Keystone Forge instance:', err);
+      }
+      featuredKeystoneInstance = null;
+    }
+    if (featuredMount) {
+      featuredMount.innerHTML = '';
+    }
+  }
+
   function launchGame(gameId: string, options?: { seed?: number; debug?: boolean }): void {
-    const mod = ARCADE_GAMES_REGISTRY.find((g) => g.metadata.id === gameId);
+    const mod =
+      ARCADE_GAMES_REGISTRY.find((g) => g.metadata.id === gameId) ??
+      (gameId === gameParadoxProtocol.metadata.id ? gameParadoxProtocol : undefined) ??
+      (gameId === game11.metadata.id ? game11 : undefined) ??
+      (gameId === gameMetaphysicalDeli.metadata.id ? gameMetaphysicalDeli : undefined) ??
+      (gameId === game12.metadata.id ? game12 : undefined) ??
+      (gameId === gameChronoSyndicate.metadata.id ? gameChronoSyndicate : undefined) ??
+      (gameId === gameChronoVortex.metadata.id ? gameChronoVortex : undefined) ??
+      (gameId === gameEventHorizon.metadata.id ? gameEventHorizon : undefined) ??
+      (gameId === gameAstralPinball.metadata.id ? gameAstralPinball : undefined) ??
+      (gameId === gameAegisZero.metadata.id ? gameAegisZero : undefined) ??
+      (gameId === gameVoltLash.metadata.id ? gameVoltLash : undefined) ??
+      (gameId === gameSnapback.metadata.id ? gameSnapback : undefined) ??
+      (gameId === gameCathodeRoulette.metadata.id ? gameCathodeRoulette : undefined);
     if (!mod || !stageMount || !stageWrapper || !catalogSection) return;
 
     cleanupActiveGame();
+    cleanupFeaturedKeystone();
+    if (featuredSection) featuredSection.hidden = true;
     activeGameId = mod.metadata.id;
     catalogSection.hidden = true;
     stageWrapper.hidden = false;
@@ -169,13 +224,21 @@ export function mountArcadeHub(rootContainer: HTMLElement = document.body): Arca
   function showCatalog(): void {
     cleanupActiveGame();
     activeGameId = null;
+    if (featuredSection && featuredMount) {
+      featuredSection.hidden = false;
+      cleanupFeaturedKeystone();
+      featuredKeystoneInstance = gameAegisZero.mountGame(featuredMount, {
+        initialSeed: Number(seedInput?.value ?? '20261108') || 20261108,
+        debug: debugEnabled,
+      });
+    }
     if (catalogSection) catalogSection.hidden = false;
     if (stageWrapper) stageWrapper.hidden = true;
     if (btnOpenStandalone) btnOpenStandalone.hidden = true;
-    document.title = 'Argon 10-Game Studio — 10 Original Games Built on Open-Source Design Principles';
-    updateContractModal(ARCADE_GAMES_REGISTRY[0]);
+    document.title = 'Aegis-Zero: Graze Overclock & Argon Studio';
+    updateContractModal(gameAegisZero);
     updateNavigationState();
-    announce('Showing Argon 10-Game Studio Catalog');
+    announce('Showing Aegis-Zero: Graze Overclock and Argon Studio Catalog');
     try {
       window.history.replaceState(null, '', '#catalog');
     } catch {
@@ -242,11 +305,47 @@ export function mountArcadeHub(rootContainer: HTMLElement = document.body): Arca
 
   btnShowCatalog?.addEventListener('click', () => showCatalog());
 
+  const btnLaunchParadox = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-paradox');
+  btnLaunchParadox?.addEventListener('click', () =>
+    launchGame(FLAGSHIP_PARADOX_GAME.metadata.id)
+  );
+
+  const btnLaunchFlagship = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-flagship-deli');
+  btnLaunchFlagship?.addEventListener('click', () => launchGame('11-metaphysical-deli'));
+
+  const btnLaunchOroboros = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-oroboros');
+  btnLaunchOroboros?.addEventListener('click', () => launchGame('12-astral-pinball'));
+
+  const btnLaunchAegisZero = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-aegis-zero');
+  btnLaunchAegisZero?.addEventListener('click', () => launchGame('13-aegis-zero'));
+
+  const btnLaunchVoltLash = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-volt-lash');
+  btnLaunchVoltLash?.addEventListener('click', () => launchGame('13-aegis-volt-lash'));
+
+  const btnLaunchSnapback = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-snapback');
+  btnLaunchSnapback?.addEventListener('click', () => launchGame('13-snapback'));
+
+  const btnLaunchKeystone = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-keystone');
+  btnLaunchKeystone?.addEventListener('click', () => launchGame('11-keystone-forge'));
+
+  const btnLaunchHorizon = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-event-horizon');
+  btnLaunchHorizon?.addEventListener('click', () => launchGame('12-event-horizon'));
+
+  const btnLaunchHypernova = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-hypernova');
+  btnLaunchHypernova?.addEventListener('click', () => launchGame(game12.metadata.id));
+
+  const btnLaunchChrono = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-chrono');
+  btnLaunchChrono?.addEventListener('click', () => launchGame(gameChronoSyndicate.metadata.id));
+
+  const btnLaunchChronoVortex = rootContainer.querySelector<HTMLButtonElement>('#btn-launch-chrono-vortex');
+  btnLaunchChronoVortex?.addEventListener('click', () => launchGame(gameChronoVortex.metadata.id));
+
   btnToggleDebug?.addEventListener('click', () => {
     debugEnabled = !debugEnabled;
     btnToggleDebug.setAttribute('aria-pressed', String(debugEnabled));
     btnToggleDebug.textContent = debugEnabled ? 'Debug: ON [D]' : 'Debug: OFF [D]';
     activeInstance?.toggleDebug?.(debugEnabled);
+    featuredKeystoneInstance?.toggleDebug?.(debugEnabled);
   });
 
   btnApplySeed?.addEventListener('click', () => {
@@ -257,13 +356,30 @@ export function mountArcadeHub(rootContainer: HTMLElement = document.body): Arca
       announce(`Restarted active game with seed ${cleanSeed}`);
     } else if (activeGameId) {
       launchGame(activeGameId, { seed: cleanSeed, debug: debugEnabled });
+    } else if (featuredKeystoneInstance?.restartWithSeed) {
+      featuredKeystoneInstance.restartWithSeed(cleanSeed);
+      announce(`Restarted Keystone Forge with seed ${cleanSeed}`);
     }
   });
 
   // Check initial URL hash (#game=01-one-more-season or #catalog)
   const hash = typeof window !== 'undefined' ? window.location.hash : '';
   const match = hash.match(/^#game=([a-z0-9-]+)$/i);
-  if (match && ARCADE_GAMES_REGISTRY.some((g) => g.metadata.id === match[1])) {
+  if (
+    match &&
+    (ARCADE_GAMES_REGISTRY.some((g) => g.metadata.id === match[1]) ||
+      match[1] === gameParadoxProtocol.metadata.id ||
+      match[1] === game11.metadata.id ||
+      match[1] === gameMetaphysicalDeli.metadata.id ||
+      match[1] === game12.metadata.id ||
+      match[1] === gameChronoSyndicate.metadata.id ||
+      match[1] === gameChronoVortex.metadata.id ||
+      match[1] === gameEventHorizon.metadata.id ||
+      match[1] === gameAstralPinball.metadata.id ||
+      match[1] === gameAegisZero.metadata.id ||
+      match[1] === gameVoltLash.metadata.id ||
+      match[1] === gameSnapback.metadata.id)
+  ) {
     launchGame(match[1]);
   } else {
     showCatalog();
@@ -273,7 +389,10 @@ export function mountArcadeHub(rootContainer: HTMLElement = document.body): Arca
     launchGame,
     showCatalog,
     getActiveGameId: () => activeGameId,
-    destroy: () => cleanupActiveGame(),
+    destroy: () => {
+      cleanupActiveGame();
+      cleanupFeaturedKeystone();
+    },
   };
 }
 
